@@ -1,100 +1,40 @@
-# AI CODING AGENT METAPROMPT
-# For: konstadinos1
-# Use: Drop this as CLAUDE.md / AGENTS.md / system prompt in any repo
-# Compatible: Claude Code, Codex, OpenCode, Cursor, Hermes delegate_task
-# ===================================================================
+# CLAUDE.md
 
-You are an elite software engineer working on konstadinos1's codebase.
-Execute tasks fully. Don't describe what you'd do — do it, verify it, ship it.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## IDENTITY & CONTEXT
+## Project Overview
 
-- Developer: Konstadinos (konstadinos1 on GitHub)
-- Location: Laval, Quebec, Canada
-- Environment: WSL2 on Windows, Ubuntu, Hermes Agent homelab
-- Primary language: Python, TypeScript/JavaScript, occasionally Go
-- Business: Bellepros (Laval QC) — promotional tools, growth tools, spin-the-wheel games
-- Projects: Quebec payroll (RQ/Revenu Québec rules), AI agent services, K8s microservices, Next.js/Supabase apps
-- Bilingual: French and English. UI strings often in French (Quebec market). Code/comments in English.
-- Timezone: America/Toronto (ET)
+A Quebec payroll calculator in pure Python (no framework, no database). It computes per-period paycheck deductions for Quebec employees — federal tax (with the Quebec abatement), Revenu Québec provincial tax, QPP, QPIP, and EI at the Quebec rate — and produces cheque-ready data. This is Quebec-specific payroll: QPP and QPIP apply, **not** CPP and standard EI.
 
-## CODE RULES
+## Commands
 
-1. Write production code, not prototypes. No TODO comments left behind.
-2. Type everything in Python (type hints) and TypeScript (strict mode).
-3. Name things explicitly. `getUserPayrollDeductions()` not `getData()`.
-4. Functions do one thing. Max 40 lines. If longer, extract.
-5. Error handling is mandatory — never let exceptions bubble silently.
-6. No magic numbers. Constants at top of file or in config.
-7. Comments explain WHY, not WHAT. The code already says what.
+```bash
+pip install -r requirements.txt   # deps: pytest, pydantic, inflect
 
-## QUEBEC-SPECIFIC RULES
+python -m pytest                  # run all tests
+python -m pytest tests/test_payroll.py::test_high_income_brackets   # run a single test
+```
 
-- Tax/payroll code: Follow Revenu Québec (RQ) and federal (CRA) rules
-- QPP, QPIP, parental insurance — these are Quebec-specific, not CPP/EI
-- French language required for user-facing strings in Bellepros apps
-- Phone format: (450) xxx-xxxx or (514) xxx-xxxx or (438) xxx-xxxx
-- Postal codes: H#X #X# format (Laval starts with H)
-- Dates: ISO 8601 internally, display as DD/MM/YYYY (Quebec convention)
+Run tests from the repo root with `python -m pytest` (not bare `pytest`): tests import `src.payroll_engine`, and only the `-m` form puts the repo root on `sys.path` — there is no conftest.py or packaging config to do it otherwise.
 
-## TECH STACK CONVENTIONS
+## Architecture
 
-### Python
-- 3.11+ target
-- `uv` or `pip` for deps, `requirements.txt` or `pyproject.toml`
-- pytest for tests, always
-- FastAPI for APIs — Pydantic models for validation
-- LangGraph/LangChain for agent work (see agent-service-toolkit patterns)
+Two source modules under `src/`, connected by the `PayStub` dataclass:
 
-### TypeScript/JavaScript
-- Next.js 14+ with App Router
-- Supabase for DB/auth
-- `bun` or `npm` for package management
-- TailwindCSS for styling
-- Zod for runtime validation
+- **`src/payroll_engine.py`** — core calculation logic.
+  - `TaxConstants`: dataclass holding all 2024 rates, brackets, maximums, and exemptions (federal/QC brackets are built in `__post_init__`). These are hardcoded example values; the stated intent is to eventually load them from external config. When rates change, this is the only place to edit.
+  - `QuebecPayrollCalculator.calculate_paycheck()`: the main entry point. It uses a **stateless annualized method** — computes annual deductions from annual gross salary, caps them at annual maximums (QPP/QPIP/EI), then divides by pay periods (weekly/bi-weekly/semi-monthly/monthly). It does not track year-to-date amounts like real DAS remittance would; it is a projection, and tests are written to that assumption.
+  - Tax credit handling: gross tax from progressive brackets, then non-refundable credits (basic personal amount + QPP/QPIP/EI contributions) valued at the lowest bracket rate (15% federal, 14% QC), then the 16.5% Quebec abatement on net federal tax.
+  - `PayStub`: the output dataclass consumed by the cheque model.
+- **`src/cheque_model.py`** — `ChequeModel` (Pydantic) turns a `PayStub` into printable cheque data via `from_paystub()`, including English number-to-words conversion using `inflect`.
 
-### Infrastructure
-- Docker + docker-compose for local
-- Kubernetes manifests if project uses K8s
-- .env files for secrets — NEVER commit secrets
-- Check .gitignore covers: .env, node_modules/, __pycache__/, .venv/, dist/
+## Conventions
 
-## TESTING
+- **All money is `decimal.Decimal`** — never float. Currency rounding goes through `_round_currency()` (`ROUND_HALF_UP` to 2 places). Tests tolerate ≤ $0.01 drift between component rounding and totals.
+- Payroll logic must follow Revenu Québec (RQ) and CRA rules; test names spell out the Quebec-specific behavior being verified (e.g. contribution caps at max pensionable/insurable earnings).
+- Every change to calculation logic needs tests, including boundary cases (income above QPP/QPIP/EI maximums, bracket thresholds).
+- Type hints on everything; Pydantic for validation of external-facing models.
+- Dates: ISO 8601 internally; display as DD/MM/YYYY (Quebec convention). User-facing strings in French for Quebec-market apps; code and comments in English.
+- Git: branch naming `feat/…`, `fix/…`, `chore/…`, `refactor/…`; conventional commit messages; never push directly to `main` — always PR.
 
-- Every PR must include tests for new/changed logic
-- Python: pytest, minimum 80% coverage on changed lines
-- TypeScript: vitest or jest
-- Test names: `test_user_with_quebec_residency_calculates_qpp_not_cpp()`
-- Always test edge cases: empty input, boundary values, Quebec-specific rules
-
-## GIT WORKFLOW
-
-- Branch naming: feat/..., fix/..., chore/..., refactor/...
-- Commit messages: conventional commits (feat:, fix:, chore:, refactor:)
-- One logical change per commit
-- Squash WIP commits before merge
-- Never push directly to main/master — always PR
-
-## SECURITY
-
-- Never hardcode API keys, tokens, passwords
-- Use environment variables or secret managers
-- Validate all external input (Zod, Pydantic)
-- SQL injection: use parameterized queries (Supabase client, SQLAlchemy)
-- XSS: never use dangerouslySetInnerHTML without sanitization
-- Dependencies: check for known CVEs before adding
-
-## WHEN YOU'RE STUCK
-
-1. Read the actual code — don't guess, don't assume
-2. Check existing patterns in the repo before introducing new ones
-3. Search the codebase for similar implementations
-4. If a task is ambiguous, make the most reasonable choice and note it — don't stop
-5. Never leave broken code. If a test fails, fix it before finishing
-
-## OUTPUT
-
-- Show the diff or the key code changes, not the entire file
-- Run tests before reporting done
-- If something can't be done, explain why and propose an alternative
-- Keep summaries short — code speaks louder than paragraphs
+See `AGENTS.md` for the developer's general cross-repo agent instructions.
